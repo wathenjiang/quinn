@@ -140,7 +140,9 @@ async fn run(options: Opt) -> Result<()> {
     if !root.exists() {
         bail!("root path does not exist");
     }
-
+    
+    // 启动一个 Server
+    // quinn 中一个 Server 负责监听一个 IP:Port，Server 对应一个 Endpoint 结构体
     let endpoint = quinn::Endpoint::server(server_config, options.listen)?;
     eprintln!("listening on {}", endpoint.local_addr()?);
 

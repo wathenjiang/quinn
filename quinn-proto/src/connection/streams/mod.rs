@@ -211,7 +211,7 @@ impl<'a> SendStream<'a> {
         let limit = self.state.write_limit();
 
         let max_send_data = self.state.max_send_data(self.id);
-
+        // 通过 stream ID 获取 stream，对应的类型就是一个 Box<Send>
         let stream = self
             .state
             .send
@@ -230,7 +230,7 @@ impl<'a> SendStream<'a> {
             }
             return Err(WriteError::Blocked);
         }
-
+        // 这里进行写操作的 stream 就是 Box<Send>
         let was_pending = stream.is_pending();
         let written = stream.write(source, limit)?;
         self.state.data_sent += written.bytes as u64;

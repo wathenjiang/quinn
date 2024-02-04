@@ -119,6 +119,7 @@ impl Endpoint {
             addr.is_ipv6(),
             runtime.clone(),
         );
+        // 在创建一个 Server 的时候启动一个 driver（负责后台驱动 UDP socket）
         let driver = EndpointDriver(rc.clone());
         runtime.spawn(Box::pin(
             async {
@@ -326,8 +327,12 @@ impl Future for EndpointDriver {
 
         let now = Instant::now();
         let mut keep_going = false;
+        // keep_going 的设计类似于一种过滤器逻辑
+        // 尝试从 UDP Socket 中取出数据
         keep_going |= endpoint.drive_recv(cx, now)?;
+        // 尝试 events 这个 mpsc 中取出事件，进行处理s
         keep_going |= endpoint.handle_events(cx, &self.0.shared);
+        // 尝试发送数据
         keep_going |= endpoint.drive_send(cx)?;
 
         if !endpoint.incoming.is_empty() {
@@ -499,7 +504,7 @@ impl State {
             if !self.send_limiter.allow_work() {
                 break Ok(true);
             }
-
+            // 尝试发送数据
             match self.socket.poll_send(cx, self.outgoing.as_slices().0) {
                 Poll::Ready(Ok(n)) => {
                     let contents_len: usize =
@@ -529,6 +534,8 @@ impl State {
         for _ in 0..IO_LOOP_BOUND {
             match self.events.poll_recv(cx) {
                 Poll::Ready(Some((ch, event))) => match event {
+                    // 从 events 通道中取出的消息将被分发到两个通道中
+                    // 可能一个是读取事件，另一个是发送事件
                     Proto(e) => {
                         if e.is_drained() {
                             self.connections.senders.remove(&ch);
@@ -548,6 +555,7 @@ impl State {
                     }
                     Transmit(t, buf) => {
                         let contents_len = buf.len();
+                        // 将消息分发给 outgoing
                         self.outgoing.push_back(udp_transmit(t, buf));
                         self.transmit_queue_contents_len = self
                             .transmit_queue_contents_len

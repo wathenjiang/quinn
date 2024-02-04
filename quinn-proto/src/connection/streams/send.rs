@@ -7,6 +7,7 @@ use crate::{connection::send_buffer::SendBuffer, frame, VarInt};
 pub(super) struct Send {
     pub(super) max_data: u64,
     pub(super) state: SendState,
+    // 待发送的数据
     pub(super) pending: SendBuffer,
     pub(super) priority: i32,
     /// Whether a frame containing a FIN bit must be transmitted, even if we don't have any new data

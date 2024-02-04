@@ -56,7 +56,8 @@ impl Connecting {
             socket,
             runtime.clone(),
         );
-
+        // 在创建一个新连接 connecting 的时候，就顺手创建一个 ConnectionDriver 对象
+        // 该 ConnectionDriver 交给异步运行时进行驱动
         runtime.spawn(Box::pin(
             ConnectionDriver(conn.clone()).instrument(Span::current()),
         ));
@@ -220,20 +221,25 @@ impl Future for ConnectionDriver {
 
     #[allow(unused_mut)] // MSRV
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        // 上锁
         let conn = &mut *self.0.state.lock("poll");
-
+        // 利用 Auto Drop 语法实现进出 span 
         let span = debug_span!("drive", id = conn.handle.0);
         let _guard = span.enter();
-
+        // 处理连接的事件，如果没有发送时间，那么会这将 context 中的 waker 注册到通道中
+        // 当有时间后，ConnectionDriver 会被再次唤醒
         if let Err(e) = conn.process_conn_events(&self.0.shared, cx) {
             conn.terminate(e, &self.0.shared);
             return Poll::Ready(());
         }
+        // 尝试发送数据（transmit 的语义就是发送数据)
         let mut keep_going = conn.drive_transmit();
         // If a timer expires, there might be more to transmit. When we transmit something, we
         // might need to reset a timer. Hence, we must loop until neither happens.
         keep_going |= conn.drive_timer(cx);
+        // 处理来自 eventpoint 中的事件s
         conn.forward_endpoint_events();
+        // 进行消息的发送
         conn.forward_app_events(&self.0.shared);
 
         if !conn.inner.is_drained() {
@@ -843,6 +849,7 @@ pub(crate) struct Shared {
 }
 
 pub(crate) struct State {
+    // 这个字段是一个 proto 定义的抽象连接，抽象的原因在于其不进行真正的网络 I/O 操作，仅仅进行纯粹的字节数据处理
     pub(crate) inner: proto::Connection,
     driver: Option<Waker>,
     handle: ConnectionHandle,
@@ -871,7 +878,9 @@ impl State {
         let mut transmits = 0;
 
         let max_datagrams = self.socket.max_transmit_segments();
+        // 构造一个新的 buffer
         let capacity = self.inner.current_mtu();
+        // 依赖于 proto::Connection 的 poll_transmit 方法来进行数据包的构造
         let mut buffer = BytesMut::with_capacity(capacity as usize);
 
         while let Some(t) = self.inner.poll_transmit(now, max_datagrams, &mut buffer) {
@@ -881,6 +890,7 @@ impl State {
             };
             // If the endpoint driver is gone, noop.
             let size = t.size;
+            // 发送出消息
             let _ = self.endpoint_events.send((
                 self.handle,
                 EndpointEvent::Transmit(t, buffer.split_to(size).freeze()),
@@ -914,6 +924,9 @@ impl State {
         cx: &mut Context,
     ) -> Result<(), ConnectionError> {
         loop {
+            // 注意：这里是关键，如果没有发生任何事件，那么这里的 poll_recv 方法返回 Poll::Pending
+            // 且（特别注意这里的且，这关系到唤醒逻辑），方法传入的 Context 中的 Waker 会进行注册
+            // 以后如果 conn_events 这个通道上有新消息，那么会唤醒这个 wakers
             match self.conn_events.poll_recv(cx) {
                 Poll::Ready(Some(ConnectionEvent::Ping)) => {
                     self.inner.ping();
@@ -939,6 +952,7 @@ impl State {
     }
 
     fn forward_app_events(&mut self, shared: &Shared) {
+        // 启动一个循环，开始处理事件
         while let Some(event) = self.inner.poll() {
             use proto::Event::*;
             match event {
@@ -957,6 +971,7 @@ impl State {
                 ConnectionLost { reason } => {
                     self.terminate(reason, shared);
                 }
+                // 可写了，那么进行唤醒
                 Stream(StreamEvent::Writable { id }) => {
                     if let Some(writer) = self.blocked_writers.remove(&id) {
                         writer.wake();

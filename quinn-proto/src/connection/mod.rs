@@ -224,7 +224,7 @@ pub struct Connection {
     /// Whether the last `poll_transmit` call yielded no data because there was
     /// no outgoing application data.
     app_limited: bool,
-
+    // 待发送的数据存储于此结构体中
     streams: StreamsState,
     /// Surplus remote CIDs for future use on new paths
     rem_cids: CidQueue,
@@ -462,6 +462,7 @@ impl Connection {
         max_datagrams: usize,
         buf: &mut BytesMut,
     ) -> Option<Transmit> {
+        // TODO: 学习 UDP 与 GSO
         assert!(max_datagrams != 0);
         let max_datagrams = match self.config.enable_segmentation_offload {
             false => 1,
@@ -827,7 +828,7 @@ impl Connection {
                     });
                 }
             }
-
+            // 将数据填充到 packet 中
             let sent = self.populate_packet(
                 now,
                 space_id,
@@ -3145,6 +3146,7 @@ impl Connection {
 
         // STREAM
         if space_id == SpaceId::Data {
+            // 取出数据，写入到 buf 中
             sent.stream_frames = self.streams.write_stream_frames(buf, max_size);
             self.stats.frame_tx.stream += sent.stream_frames.len() as u64;
         }

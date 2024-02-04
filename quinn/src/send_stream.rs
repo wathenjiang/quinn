@@ -93,7 +93,21 @@ impl SendStream {
         if let Some(ref x) = conn.error {
             return Poll::Ready(Err(WriteError::ConnectionLost(x.clone())));
         }
+        // 这里显示了 quinn crate 与 quinn-proto crate 之间的关系
+        // 当前 SendStream.send_stream 方法是位于 quinn crate 中的
+        // 我们对 SendStream 中的 state 进行上锁，然后访问 Connection 的 state
+        // 我们发现，这里 state 的 inner 是来自于 quinn::proto 的 Connection 类型
 
+        // 可见 quinn crate 是依赖于 quinn-proto crate 的
+        // 本质上，write_fn 是一个仅仅面向字节流的写函数，其完全不关心网络
+        // F: FnOnce(&mut proto::SendStream) -> Result<R, proto::WriteError>
+        // 而 conn.inner.send_stream 方法则是用于提供一个 proto::SendStream 来让 write_fn 函数进行写入字节数据
+
+        // 这里的代码有点类似于字节数组的生产者。那么，消费者是谁？
+        // 这里不进行发送，一定有消费者负责消费 stream 内的 buffer，然后进行发送
+        // 顺着这个思路，我们也大概理解了为什么这里在写字节数据之前，需要对 State 进行上锁
+        // 那么消费者一定是在 State 上锁之后进行的
+        // 继续这个思路 。。。直接去找该 lock 是在哪里调用的s
         let result = match write_fn(&mut conn.inner.send_stream(self.stream)) {
             Ok(result) => result,
             Err(Blocked) => {
